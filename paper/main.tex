@@ -4,42 +4,111 @@
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{booktabs}
-\title{Cross-Embodiment Force Vocabularies: ICLR Main-Conference Gate Archive}
+\usepackage{graphicx}
+\usepackage{multirow}
+\title{Cross-Embodiment Force Vocabularies for Contact-Rich Action Transfer: A MuJoCo Stress Test}
 \author{Anonymous Authors}
 \begin{document}
 \maketitle
+
 \begin{abstract}
-This document is not an ICLR main-conference submission. It is the v3 main-conference gate for a generated robotics draft about cross-embodiment robot policy transfer. The original research bet was: Learn force/action primitives that preserve physical effect across robot morphologies. After a stricter hostile review, the honest terminal decision is \textbf{KILL/ARCHIVE}. Submission-hardening version: v3.
+Cross-embodiment robot transfer is often framed as learning a shared policy or world model across morphologies. This paper studies a narrower mechanism: whether a discrete vocabulary of contact-force/effect tokens can provide an embodiment-normalized action interface for contact-rich manipulation. We replace a prior synthetic scaffold with a real MuJoCo benchmark in which pushers with different radii, masses, gains, damping, and contact compliance must push a box under held-out embodiment and object/friction shifts. From 120 source-embodiment fitting tasks we learn an 8-token force/effect vocabulary and evaluate seven action selectors over 5 seeds, 7 splits, and 2,940 main evaluation rows. The vocabulary method improves substantially over geometry-only, source-action-transfer, and raw-force-scalar baselines, e.g. on combined shift it reduces energy relative to raw-force transfer by 0.107. However, it does not consistently beat robust domain-randomized MPC, and ablations do not prove the full online/tangent/rotation mechanism is necessary. We therefore mark the paper \textbf{STRONG REVISE}, not ICLR-main ready.
 \end{abstract}
 
-\section{Gate Decision}
-The v2 paper was workshop-only. Under the active ICLR-main standard, that is insufficient. The local artifacts contain synthetic multi-seed diagnostics, but no real-robot validation, high-fidelity simulator benchmark, trained world-action model, implemented real baselines, or manual full-paper related-work synthesis. These missing items are not recoverable by editing text or rerunning the synthetic script.
+\section{Introduction}
 
-\section{Fatal ICLR-Main Blockers}
-\begin{itemize}
-\item Evidence is synthetic and generated from a shared batch template.
-\item Baselines are diagnostic probability models, not implemented competing robot systems.
-\item Ablations do not correspond to a trained model checkpoint.
-\item No hardware, high-fidelity benchmark, qualitative rollouts, or failure videos are available.
-\item Related work is based on pool slices and hostile metadata, not a manual full-paper synthesis.
-\item Claims would be misleading if framed as ICLR-main empirical robotics evidence.
-\end{itemize}
+Robots with different end-effectors can apply actions with similar intended task semantics but very different physical effects. A small stiff pusher, a large compliant pusher, and a high-gain heavy pusher may all execute ``push toward the target,'' yet the resulting contact impulse, slip, rotation, and target progress can differ sharply. Cross-embodiment transfer methods based only on action coordinates or generic uncertainty can hide this physical mismatch.
 
-\section{Hostile Prior-Work Pressure}
-The closest local hostile records include:
-\begin{itemize}
-\item Scaling Cross-Embodiment World Models for Dexterous Manipulation (2025)
-\item Human-Humanoid Robots Cross-Embodiment Behavior-Skill Transfer Using Decomposed Adversarial Learning from Demonstration (2024)
-\item Any2Any: Efficient Cross-Embodiment Transfer for Humanoid Whole-Body Tracking (2026)
-\item Interactive Force Control Based on Multimodal Robot Skin for Physical Human-Robot Collaboration (2022)
-\item Domain-Generalizable Emotion Recognition across Social Media, Sitcom Dialogues, and Online Video Transcripts via Large Language Model-Guided Invariant Emotion Explanations (n.d.)
-\end{itemize}
-These works make generic world models, uncertainty, model-based planning, and robot policy robustness crowded. Without real empirical evidence, the remaining novelty boundary is too weak for ICLR main.
+The research bet in this paper is that contact actions should be mediated by a force/effect vocabulary: a discrete set of tokens learned from measured contact impulses and task effects across source embodiments. A candidate action is then scored not only by geometry or nominal rollout distance, but by the force/effect token it is expected to instantiate.
 
-\section{What Remains Useful}
-The archive is still useful as an idea seed and reproducibility scaffold. The synthetic code, stress-test CSVs, reviewer attacks, and novelty-boundary docs can inform a future project. The correct next step is not more paper polishing; it is new evidence: implemented models, real baselines, manual related work, and robot or high-fidelity simulator validation.
+This paper is intentionally conservative. The current evidence answers a specific question: does such a vocabulary outperform implemented alternatives in a high-fidelity simulator stress test? The answer is partial. The method is clearly better than weak transfer baselines, but it is not yet stronger than robust domain-randomized MPC. This makes the project a strong-revise candidate, not a submission-ready ICLR main paper.
 
-\section{Terminal Action}
-Decision: \textbf{KILL/ARCHIVE for ICLR main}. Do not submit this paper to ICLR main in the current form. Revival requires a substantially new empirical project.
+\section{Related Work and Novelty Boundary}
+
+The closest local prior-work cluster includes cross-embodiment world models and skill transfer \citep{prior1,prior2,prior3}, robot force-control systems \citep{prior4}, large-scale robot augmentation \citep{prior8}, and failure-reasoning data for manipulation \citep{prior6}. These works make generic scaling, domain randomization, and model-based robustness crowded positions. The novelty boundary here is deliberately narrower: the contribution must show that representing contact actions through learned force/effect tokens changes action selection under embodiment shift.
+
+This draft does not claim state-of-the-art robotics performance. It asks whether the proposed representation earns further development when tested against geometry, raw force transfer, source action transfer, robust MPC, and an oracle upper bound.
+
+\section{Method}
+
+\paragraph{Benchmark.}
+Each MuJoCo episode places a box near the origin and samples a target. A pusher executes one controlled contact push. Embodiments vary pusher radius, pusher mass, actuator gain, slide-joint damping, contact compliance, and pusher friction. Object mass and floor friction define additional contact shifts. We evaluate seven splits: nominal, three held-out embodiment splits, low friction, heavy object, and combined shift.
+
+\paragraph{Force/effect descriptors.}
+For each source rollout we measure normal and tangential box-pusher contact impulse using MuJoCo contact forces, contact duration, peak contact forces, normalized target progress, final-distance ratio, yaw magnitude, action angle offset, lateral offset, and action distance. Embodiment-normalized descriptors scale force and action terms by pusher radius and actuator gain. We fit an 8-token deterministic k-means vocabulary over 120 source-embodiment tasks.
+
+\paragraph{Action selection.}
+At test time, each candidate action is rolled out through a fixed source-branch library. The proposed CEFV selector assigns force/effect tokens to these predicted rollouts and scores candidates by token energy, source mean energy, geometry, token disagreement, and an online token residual learned from previous episodes in the same deployment stream. Baselines are random shooting, geometry-only MPC, source-action transfer, raw-force-scalar transfer, robust domain-randomized MPC, and an oracle that scores candidates under the true held-out embodiment.
+
+\section{Experiments}
+
+The full run uses 5 seeds, 12 episodes per seed/split/method, 7 splits, and 7 main methods, producing 2,940 main evaluation rows. Combined-shift ablations add 420 rows. The main metric is lower-is-better action energy:
+\[
+E = d_{\mathrm{final}} + 0.020\,\mathrm{effort} + 0.035|\mathrm{yaw}| + 0.220\,\mathrm{failure}.
+\]
+We also report success rate using a 7.5 cm final-distance threshold.
+
+\begin{table}[t]
+\centering
+\caption{Selected MuJoCo results. Success is higher-is-better; energy is lower-is-better. CEFV beats weak transfer baselines but not robust MPC consistently.}
+\begin{tabular}{llcc}
+\toprule
+Split & Method & Success & Energy \\
+\midrule
+\multirow{4}{*}{Nominal}
+& raw force scalar & 0.067 & 0.242 \\
+& robust MPC & 0.250 & 0.136 \\
+& CEFV full & 0.250 & 0.134 \\
+& oracle & 0.350 & 0.127 \\
+\midrule
+\multirow{4}{*}{Held-out large soft}
+& raw force scalar & 0.167 & 0.213 \\
+& robust MPC & 0.517 & 0.123 \\
+& CEFV full & 0.467 & 0.125 \\
+& oracle & 0.650 & 0.115 \\
+\midrule
+\multirow{4}{*}{Heavy object}
+& raw force scalar & 0.050 & 0.277 \\
+& robust MPC & 0.300 & 0.161 \\
+& CEFV full & 0.233 & 0.176 \\
+& oracle & 0.350 & 0.153 \\
+\midrule
+\multirow{4}{*}{Combined shift}
+& raw force scalar & 0.117 & 0.276 \\
+& robust MPC & 0.267 & 0.163 \\
+& CEFV full & 0.267 & 0.168 \\
+& oracle & 0.367 & 0.141 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.98\linewidth]{../figures/force_vocab_success_by_split.png}
+\caption{Success by split. CEFV improves over raw-force and geometry baselines, but robust domain-randomized MPC remains competitive or stronger.}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.98\linewidth]{../figures/force_vocab_ablation_energy.png}
+\caption{Combined-shift ablations. Continuous raw-force regression is much weaker, but removing tangent/rotation features or online adaptation does not hurt, so the full mechanism is not yet isolated.}
+\end{figure}
+
+\section{Results and Decision}
+
+CEFV gives a real positive signal against weak baselines. On combined shift it improves energy over raw-force scalar transfer by 0.107 with a paired-test p-value below 0.0001; it also improves over geometry MPC on most splits. The learned tokens separate difficult contact regimes: the full vocabulary contains high-energy failure-like tokens and lower-energy progress tokens with different success rates.
+
+The strongest negative result is the comparison to robust domain-randomized MPC. CEFV ties robust MPC on nominal and combined-shift success, but robust has lower energy on combined shift, heavy object, held-out high gain, and held-out large soft. On heavy object, robust reaches 0.300 success and 0.161 energy, compared with CEFV's 0.233 success and 0.176 energy. The combined-shift ablation is also unfavorable to the full mechanism: no tangent/rotation features obtains 0.163 energy, no online adaptation obtains 0.164, and full CEFV obtains 0.168.
+
+\section{Limitations}
+
+The benchmark is custom MuJoCo rather than hardware or a public manipulation benchmark. The action space is a compact push primitive set, not a general robot policy. The related-work audit is based on the local pool and still requires manual full-paper synthesis. Most importantly, the method has not beaten the strongest non-oracle baseline. These facts make submission unsafe.
+
+\section{Conclusion}
+
+Cross-embodiment force vocabularies are plausible and empirically useful relative to raw-force and geometry-only transfer. The current evidence does not justify an ICLR main submission, because robust domain-randomized MPC remains as strong or stronger and ablations do not isolate the full method. The correct terminal decision for this rebuild is \textbf{STRONG REVISE}.
+
+\bibliographystyle{iclr2026_conference}
+\bibliography{references}
 
 \end{document}

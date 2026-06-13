@@ -1,16 +1,31 @@
-Submission-hardening experiment for paper 64 cross_embodiment_force_vocabularies
-Seven seeds, 600 episodes per seed, strong baselines, ablations, stress sweep, and negative cases.
-observed_only_behavior_clone hidden_mode_shift mean_success=0.4029 ci95=0.0090 tail=0.5971
-observed_only_behavior_clone combined_stress mean_success=0.3224 ci95=0.0144 tail=0.6776
-data_augmentation_wam hidden_mode_shift mean_success=0.4912 ci95=0.0188 tail=0.5088
-data_augmentation_wam combined_stress mean_success=0.4357 ci95=0.0055 tail=0.5643
-scalar_uncertainty_planner hidden_mode_shift mean_success=0.5674 ci95=0.0291 tail=0.4326
-scalar_uncertainty_planner combined_stress mean_success=0.5071 ci95=0.0139 tail=0.4929
-ensemble_disagreement_planner hidden_mode_shift mean_success=0.5943 ci95=0.0096 tail=0.4057
-ensemble_disagreement_planner combined_stress mean_success=0.5548 ci95=0.0135 tail=0.4452
-conformal_risk_filter hidden_mode_shift mean_success=0.6131 ci95=0.0135 tail=0.3869
-conformal_risk_filter combined_stress mean_success=0.5617 ci95=0.0103 tail=0.4383
-proposed_branch_mechanism hidden_mode_shift mean_success=0.6902 ci95=0.0132 tail=0.3098
-proposed_branch_mechanism combined_stress mean_success=0.6783 ci95=0.0214 tail=0.3217
-oracle_branch_upper_bound hidden_mode_shift mean_success=0.7643 ci95=0.0164 tail=0.2357
-oracle_branch_upper_bound combined_stress mean_success=0.7476 ci95=0.0144 tail=0.2524
+Real MuJoCo cross-embodiment force-vocabulary benchmark for paper 64
+train_tasks=120 vocab_size=8 seeds=5 episodes=12
+splits=nominal,heldout_small_radius,heldout_large_soft,heldout_high_gain,low_friction,heavy_object,combined_shift
+combined_shift cefv_full success=0.267+/-0.113 energy=0.168+/-0.018 distance=0.118
+combined_shift oracle_embodiment_mpc success=0.367+/-0.123 energy=0.141+/-0.014 distance=0.098
+combined_shift raw_force_scalar success=0.117+/-0.082 energy=0.276+/-0.036 distance=0.208
+combined_shift robust_domain_randomized_mpc success=0.267+/-0.113 energy=0.163+/-0.015 distance=0.113
+heavy_object cefv_full success=0.233+/-0.108 energy=0.176+/-0.015 distance=0.126
+heavy_object oracle_embodiment_mpc success=0.350+/-0.122 energy=0.153+/-0.011 distance=0.099
+heavy_object raw_force_scalar success=0.050+/-0.056 energy=0.277+/-0.031 distance=0.214
+heavy_object robust_domain_randomized_mpc success=0.300+/-0.117 energy=0.161+/-0.012 distance=0.108
+heldout_high_gain cefv_full success=0.000+/-0.000 energy=0.243+/-0.014 distance=0.185
+heldout_high_gain oracle_embodiment_mpc success=0.000+/-0.000 energy=0.216+/-0.012 distance=0.167
+heldout_high_gain raw_force_scalar success=0.000+/-0.000 energy=0.350+/-0.032 distance=0.284
+heldout_high_gain robust_domain_randomized_mpc success=0.000+/-0.000 energy=0.230+/-0.013 distance=0.179
+heldout_large_soft cefv_full success=0.467+/-0.127 energy=0.125+/-0.008 distance=0.084
+heldout_large_soft oracle_embodiment_mpc success=0.650+/-0.122 energy=0.115+/-0.006 distance=0.070
+heldout_large_soft raw_force_scalar success=0.167+/-0.095 energy=0.213+/-0.023 distance=0.161
+heldout_large_soft robust_domain_randomized_mpc success=0.517+/-0.128 energy=0.123+/-0.008 distance=0.082
+heldout_small_radius cefv_full success=0.050+/-0.056 energy=0.157+/-0.010 distance=0.112
+heldout_small_radius oracle_embodiment_mpc success=0.250+/-0.110 energy=0.134+/-0.011 distance=0.095
+heldout_small_radius raw_force_scalar success=0.067+/-0.064 energy=0.264+/-0.027 distance=0.209
+heldout_small_radius robust_domain_randomized_mpc success=0.033+/-0.046 energy=0.155+/-0.009 distance=0.116
+low_friction cefv_full success=0.100+/-0.077 energy=0.173+/-0.011 distance=0.124
+low_friction oracle_embodiment_mpc success=0.133+/-0.087 energy=0.164+/-0.010 distance=0.124
+low_friction raw_force_scalar success=0.033+/-0.046 energy=0.287+/-0.025 distance=0.232
+low_friction robust_domain_randomized_mpc success=0.083+/-0.071 energy=0.169+/-0.010 distance=0.126
+nominal cefv_full success=0.250+/-0.110 energy=0.134+/-0.008 distance=0.096
+nominal oracle_embodiment_mpc success=0.350+/-0.122 energy=0.127+/-0.008 distance=0.090
+nominal raw_force_scalar success=0.067+/-0.064 energy=0.241+/-0.027 distance=0.193
+nominal robust_domain_randomized_mpc success=0.250+/-0.110 energy=0.136+/-0.008 distance=0.098
