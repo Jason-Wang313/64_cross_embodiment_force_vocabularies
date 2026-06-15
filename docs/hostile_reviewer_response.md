@@ -1,26 +1,30 @@
-        # Hostile Reviewer Response
+# Hostile Reviewer Response
 
-        Paper: 64 Cross-Embodiment Force Vocabularies
+Paper: 64 Cross-Embodiment Force Vocabularies
 
-        ## Strongest Technical Threats
-        - Scaling Cross-Embodiment World Models for Dexterous Manipulation (2025)
-- Human-Humanoid Robots Cross-Embodiment Behavior-Skill Transfer Using Decomposed Adversarial Learning from Demonstration (2024)
-- Any2Any: Efficient Cross-Embodiment Transfer for Humanoid Whole-Body Tracking (2026)
-- Interactive Force Control Based on Multimodal Robot Skin for Physical Human-Robot Collaboration (2022)
-- Domain-Generalizable Emotion Recognition across Social Media, Sitcom Dialogues, and Online Video Transcripts via Large Language Model-Guided Invariant Emotion Explanations (n.d.)
-- Scaling Cross-Environment Failure Reasoning Data for Vision-Language Robotic Manipulation (2025)
-- Predictive model on the effect of restrictor on transfer function parameters on pneumatic control system (n.d.)
-- OXE-AugE: A Large-Scale Robot Augmentation of OXE for Scaling Cross-Embodiment Policy Learning (2025)
+Continuation audit date: 2026-06-15
 
-        ## ICLR Main Response
-        A hostile ICLR reviewer would be correct to reject this as a main-conference submission. The v2 paper has reproducible synthetic evidence and careful limitations, but it does not contain the real robot, high-fidelity simulator, learned model, or manual related-work depth needed for the ICLR main track.
+## Strongest Technical Threats
 
-        ## Honest Action
-        The paper is marked `KILL_ARCHIVE`. This avoids converting a generated workshop-style idea into an overstated main-conference claim.
+- Cross-embodiment world models and policy-transfer systems.
+- Domain-randomized MPC and robust model-based control.
+- Force-control and tactile/force-conditioned manipulation systems.
+- Large-scale robot augmentation/data systems such as OXE-style cross-embodiment collections.
+- Failure-reasoning and deployment-shift datasets for manipulation.
 
-        ## What Would Be Needed To Revive
-        - Real robot or high-fidelity benchmark experiments.
-        - Implemented model and baselines, not synthetic probability tables.
-        - Manual full-paper related-work audit.
-        - Paper-specific writing and figures.
-        - Evidence that the core mechanism is learned and useful under deployment shift.
+## ICLR Main Response
+
+A hostile ICLR reviewer would no longer be correct to reject the paper for synthetic-only evidence. The v4 rebuild contains a real MuJoCo contact-dynamics benchmark, a fitted force/effect vocabulary, held-out embodiment splits, implemented baselines, stress tests, ablations, paired tests, figures, and a rebuilt PDF.
+
+The reviewer would still be correct to reject the paper as ICLR-main-ready. CEFV improves over weak geometry/source/raw-force baselines, but it does not consistently beat robust domain-randomized MPC. The combined-shift ablations also fail to prove that tangent/rotation features or online adaptation are necessary, because simpler variants match or slightly outperform the full method.
+
+## Honest Action
+
+The current terminal state is `STRONG_REVISE`, not `KILL_ARCHIVE` and not submission-ready. The evidence is real enough to keep as a serious empirical scaffold, but not decisive enough for ICLR main.
+
+## What Would Be Needed To Revive
+
+- Clear wins over robust domain-randomized MPC on held-out embodiments and combined shift.
+- Ablations that isolate the discrete vocabulary, embodiment normalization, tangent/rotation features, and online adaptation.
+- Hardware or public benchmark validation.
+- Manual full-paper related-work synthesis.

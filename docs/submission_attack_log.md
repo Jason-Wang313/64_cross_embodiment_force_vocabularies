@@ -2,6 +2,10 @@
 
 Paper: 64 cross_embodiment_force_vocabularies
 
+## 2026-06-15 Continuation Note
+
+The older rounds below document the v3 synthetic-scaffold archive decision. They are retained as history, but they are no longer the current terminal state. The v4 real-MuJoCo rebuild and 2026-06-15 continuation audit supersede them: current decision is `STRONG_REVISE`, not `KILL_ARCHIVE`, because real evidence exists but CEFV still does not consistently beat robust domain-randomized MPC and ablations do not isolate the full mechanism.
+
 This v3 pass applies the ICLR main-conference bar. The result is an honest archive decision, not a workshop resubmission.
 
 ## ICLR Main Gate Round 1
