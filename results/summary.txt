@@ -1,31 +1,74 @@
-Real MuJoCo cross-embodiment force-vocabulary benchmark for paper 64
-train_tasks=120 vocab_size=8 seeds=5 episodes=12
-splits=nominal,heldout_small_radius,heldout_large_soft,heldout_high_gain,low_friction,heavy_object,combined_shift
-combined_shift cefv_full success=0.267+/-0.113 energy=0.168+/-0.018 distance=0.118
-combined_shift oracle_embodiment_mpc success=0.367+/-0.123 energy=0.141+/-0.014 distance=0.098
-combined_shift raw_force_scalar success=0.117+/-0.082 energy=0.276+/-0.036 distance=0.208
-combined_shift robust_domain_randomized_mpc success=0.267+/-0.113 energy=0.163+/-0.015 distance=0.113
-heavy_object cefv_full success=0.233+/-0.108 energy=0.176+/-0.015 distance=0.126
-heavy_object oracle_embodiment_mpc success=0.350+/-0.122 energy=0.153+/-0.011 distance=0.099
-heavy_object raw_force_scalar success=0.050+/-0.056 energy=0.277+/-0.031 distance=0.214
-heavy_object robust_domain_randomized_mpc success=0.300+/-0.117 energy=0.161+/-0.012 distance=0.108
-heldout_high_gain cefv_full success=0.000+/-0.000 energy=0.243+/-0.014 distance=0.185
-heldout_high_gain oracle_embodiment_mpc success=0.000+/-0.000 energy=0.216+/-0.012 distance=0.167
-heldout_high_gain raw_force_scalar success=0.000+/-0.000 energy=0.350+/-0.032 distance=0.284
-heldout_high_gain robust_domain_randomized_mpc success=0.000+/-0.000 energy=0.230+/-0.013 distance=0.179
-heldout_large_soft cefv_full success=0.467+/-0.127 energy=0.125+/-0.008 distance=0.084
-heldout_large_soft oracle_embodiment_mpc success=0.650+/-0.122 energy=0.115+/-0.006 distance=0.070
-heldout_large_soft raw_force_scalar success=0.167+/-0.095 energy=0.213+/-0.023 distance=0.161
-heldout_large_soft robust_domain_randomized_mpc success=0.517+/-0.128 energy=0.123+/-0.008 distance=0.082
-heldout_small_radius cefv_full success=0.050+/-0.056 energy=0.157+/-0.010 distance=0.112
-heldout_small_radius oracle_embodiment_mpc success=0.250+/-0.110 energy=0.134+/-0.011 distance=0.095
-heldout_small_radius raw_force_scalar success=0.067+/-0.064 energy=0.264+/-0.027 distance=0.209
-heldout_small_radius robust_domain_randomized_mpc success=0.033+/-0.046 energy=0.155+/-0.009 distance=0.116
-low_friction cefv_full success=0.100+/-0.077 energy=0.173+/-0.011 distance=0.124
-low_friction oracle_embodiment_mpc success=0.133+/-0.087 energy=0.164+/-0.010 distance=0.124
-low_friction raw_force_scalar success=0.033+/-0.046 energy=0.287+/-0.025 distance=0.232
-low_friction robust_domain_randomized_mpc success=0.083+/-0.071 energy=0.169+/-0.010 distance=0.126
-nominal cefv_full success=0.250+/-0.110 energy=0.134+/-0.008 distance=0.096
-nominal oracle_embodiment_mpc success=0.350+/-0.122 energy=0.127+/-0.008 distance=0.090
-nominal raw_force_scalar success=0.067+/-0.064 energy=0.241+/-0.027 distance=0.193
-nominal robust_domain_randomized_mpc success=0.250+/-0.110 energy=0.136+/-0.008 distance=0.098
+MuJoCo cross-embodiment force/effect vocabulary benchmark for Paper 64, v5
+train_tasks=240 vocab_size=10 seeds=8 episodes=20 splits=nominal,heldout_small_radius,heldout_large_soft,heldout_high_gain,heldout_weak_actuator,low_friction,heavy_object,high_friction,actuation_noise,combined_shift
+terminal_decision=STRONG_REVISE
+
+Aggregate method summary:
+cefv_v4 success=0.4525 energy=0.1539 regret=0.0513 failure=0.0081
+continuous_force_regression success=0.3931 energy=0.1557 regret=0.0531 failure=0.0056
+cvar_domain_randomized_mpc success=0.5644 energy=0.1381 regret=0.0355 failure=0.0094
+geometry_mpc success=0.0006 energy=0.3130 regret=0.2104 failure=0.0187
+oracle_embodiment_mpc success=0.7725 energy=0.1026 regret=0.0000 failure=0.0000
+random_shooting success=0.0537 energy=0.3336 regret=0.2310 failure=0.0275
+raw_force_scalar success=0.0906 energy=0.2414 regret=0.1388 failure=0.0262
+rc_fev_no_online success=0.5787 energy=0.1379 regret=0.0353 failure=0.0094
+rc_fev_v5 success=0.5781 energy=0.1379 regret=0.0353 failure=0.0094
+robust_domain_randomized_mpc success=0.5625 energy=0.1387 regret=0.0361 failure=0.0088
+source_action_transfer success=0.5569 energy=0.1469 regret=0.0443 failure=0.0006
+
+RC-FEV split summary:
+actuation_noise rc_fev success=0.4688+/-0.0776 energy=0.1538+/-0.0088 regret=0.0433 failure=0.0063
+combined_shift rc_fev success=0.3438+/-0.0738 energy=0.1762+/-0.0118 regret=0.0732 failure=0.0063
+heavy_object rc_fev success=0.5875+/-0.0765 energy=0.1296+/-0.0052 regret=0.0266 failure=0.0000
+heldout_high_gain rc_fev success=0.3375+/-0.0735 energy=0.1687+/-0.0094 regret=0.0352 failure=0.0563
+heldout_large_soft rc_fev success=0.7750+/-0.0649 energy=0.1128+/-0.0050 regret=0.0215 failure=0.0000
+heldout_small_radius rc_fev success=0.7375+/-0.0684 energy=0.1323+/-0.0069 regret=0.0394 failure=0.0125
+heldout_weak_actuator rc_fev success=0.6125+/-0.0757 energy=0.1307+/-0.0068 regret=0.0384 failure=0.0000
+high_friction rc_fev success=0.6625+/-0.0735 energy=0.1280+/-0.0059 regret=0.0386 failure=0.0000
+low_friction rc_fev success=0.5312+/-0.0776 energy=0.1349+/-0.0051 regret=0.0211 failure=0.0063
+nominal rc_fev success=0.7250+/-0.0694 energy=0.1119+/-0.0052 regret=0.0154 failure=0.0063
+
+Decision audit:
+- aggregate vs geometry_mpc: success_delta=0.5775, energy_improvement=0.1751, failure_delta=-0.0094
+- aggregate vs source_action_transfer: success_delta=0.0212, energy_improvement=0.0090, failure_delta=0.0087
+- aggregate vs raw_force_scalar: success_delta=0.4875, energy_improvement=0.1035, failure_delta=-0.0169
+- aggregate vs continuous_force_regression: success_delta=0.1850, energy_improvement=0.0178, failure_delta=0.0037
+- aggregate vs robust_domain_randomized_mpc: success_delta=0.0156, energy_improvement=0.0008, failure_delta=0.0006
+- aggregate vs cvar_domain_randomized_mpc: success_delta=0.0138, energy_improvement=0.0002, failure_delta=0.0000
+- aggregate vs cefv_v4: success_delta=0.1256, energy_improvement=0.0160, failure_delta=0.0012
+- ablation gate failed vs rc_fev_no_embodiment_normalization: success_delta=-0.0250, energy_improvement=-0.0001
+- ablation gate failed vs rc_fev_no_online: success_delta=-0.0062, energy_improvement=0.0002
+- ablation gate failed vs rc_fev_no_robust_anchor: success_delta=-0.0437, energy_improvement=0.0006
+- ablation gate failed vs rc_fev_no_tangent_rotation_features: success_delta=-0.0187, energy_improvement=-0.0001
+- ablation gate failed vs small_vocabulary_k3: success_delta=-0.0062, energy_improvement=-0.0000
+
+Stress pairwise rows:
+combined_shift vs random_shooting success_delta=0.2687 energy_improvement=0.1588 failure_delta=-0.0187
+combined_shift vs geometry_mpc success_delta=0.3375 energy_improvement=0.1697 failure_delta=-0.0375
+combined_shift vs source_action_transfer success_delta=-0.0063 energy_improvement=0.0110 failure_delta=0.0063
+combined_shift vs raw_force_scalar success_delta=0.2375 energy_improvement=0.0897 failure_delta=-0.0375
+combined_shift vs continuous_force_regression success_delta=0.0938 energy_improvement=0.0132 failure_delta=0.0000
+combined_shift vs robust_domain_randomized_mpc success_delta=0.0000 energy_improvement=0.0005 failure_delta=0.0000
+combined_shift vs cvar_domain_randomized_mpc success_delta=-0.0187 energy_improvement=0.0005 failure_delta=0.0000
+combined_shift vs cefv_v4 success_delta=0.0125 energy_improvement=0.0043 failure_delta=-0.0063
+combined_shift vs rc_fev_no_online success_delta=0.0000 energy_improvement=-0.0007 failure_delta=0.0000
+combined_shift vs oracle_embodiment_mpc success_delta=-0.3812 energy_improvement=-0.0732 failure_delta=0.0063
+heavy_object vs random_shooting success_delta=0.5437 energy_improvement=0.2110 failure_delta=-0.0187
+heavy_object vs geometry_mpc success_delta=0.5875 energy_improvement=0.1908 failure_delta=0.0000
+heavy_object vs source_action_transfer success_delta=-0.0250 energy_improvement=0.0124 failure_delta=0.0000
+heavy_object vs raw_force_scalar success_delta=0.5188 energy_improvement=0.1013 failure_delta=0.0000
+heavy_object vs continuous_force_regression success_delta=0.2250 energy_improvement=0.0159 failure_delta=0.0000
+heavy_object vs robust_domain_randomized_mpc success_delta=0.0125 energy_improvement=0.0003 failure_delta=0.0000
+heavy_object vs cvar_domain_randomized_mpc success_delta=0.0312 energy_improvement=0.0010 failure_delta=0.0000
+heavy_object vs cefv_v4 success_delta=0.1688 energy_improvement=0.0144 failure_delta=0.0000
+heavy_object vs rc_fev_no_online success_delta=-0.0063 energy_improvement=0.0002 failure_delta=0.0000
+heavy_object vs oracle_embodiment_mpc success_delta=-0.2000 energy_improvement=-0.0266 failure_delta=0.0000
+heldout_high_gain vs random_shooting success_delta=0.3063 energy_improvement=0.2416 failure_delta=-0.0250
+heldout_high_gain vs geometry_mpc success_delta=0.3375 energy_improvement=0.2742 failure_delta=-0.0125
+heldout_high_gain vs source_action_transfer success_delta=-0.0750 energy_improvement=0.0089 failure_delta=0.0563
+heldout_high_gain vs raw_force_scalar success_delta=0.3125 energy_improvement=0.1347 failure_delta=0.0063
+heldout_high_gain vs continuous_force_regression success_delta=0.1375 energy_improvement=0.0216 failure_delta=0.0312
+heldout_high_gain vs robust_domain_randomized_mpc success_delta=0.0250 energy_improvement=0.0046 failure_delta=0.0000
+heldout_high_gain vs cvar_domain_randomized_mpc success_delta=0.0375 energy_improvement=0.0017 failure_delta=0.0000
+heldout_high_gain vs cefv_v4 success_delta=0.0750 energy_improvement=0.0115 failure_delta=0.0375
+heldout_high_gain vs rc_fev_no_online success_delta=0.0063 energy_improvement=-0.0005 failure_delta=0.0000
+heldout_high_gain vs oracle_embodiment_mpc success_delta=-0.1625 energy_improvement=-0.0352 failure_delta=0.0563

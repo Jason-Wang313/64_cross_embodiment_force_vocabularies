@@ -1,9 +1,9 @@
-"""Real MuJoCo force-vocabulary benchmark for paper 64.
+"""MuJoCo force/effect vocabulary benchmark for Paper 64.
 
-The previous v3 artifact generated synthetic probability tables. This rebuild
-evaluates the actual research claim with contact dynamics: a discrete
-force/effect vocabulary is fitted from source embodiments, then used to select
-push actions on held-out robot embodiments and contact shifts.
+Version 5 upgrades the v4 CEFV scaffold into a hostile-review benchmark.  The
+proposed method, RC-FEV, is not allowed to win by weakening robust MPC: it uses a
+robust/CVaR branch anchor and must show that calibrated force/effect tokens and
+online residuals add value beyond that strong anchor.
 """
 
 from __future__ import annotations
@@ -15,19 +15,19 @@ import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean, stdev
-from typing import Iterable
+from typing import Iterable, Sequence
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
-from scipy import stats
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "results"
 FIGURES = ROOT / "figures"
-RESULTS.mkdir(exist_ok=True)
-FIGURES.mkdir(exist_ok=True)
 
 SUCCESS_RADIUS = 0.075
 ACTIVE_STEPS = 40
@@ -83,6 +83,7 @@ class TokenModel:
     mu: np.ndarray
     sigma: np.ndarray
     token_energy: np.ndarray
+    token_std: np.ndarray
     token_success: np.ndarray
     token_count: np.ndarray
     feature_kind: str
@@ -105,18 +106,45 @@ class ForceVocabulary:
 class AdaptState:
     residual: dict[int, float] = field(default_factory=dict)
     counts: dict[int, int] = field(default_factory=dict)
+    action_residual: dict[tuple[int, int, int], float] = field(default_factory=dict)
+    action_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    global_residual: float = 0.0
+    global_count: int = 0
+    last_abs_error: float = 0.0
 
     def bias(self, token: int) -> float:
-        return self.residual.get(token, 0.0)
+        token_bias = self.residual.get(token, 0.0)
+        token_count = self.counts.get(token, 0)
+        token_weight = min(0.75, token_count / 10.0)
+        global_weight = min(0.35, self.global_count / 22.0)
+        return token_weight * token_bias + global_weight * self.global_residual
 
-    def update(self, tokens: list[int], observed_energy: float, predicted_energy: float) -> None:
+    def action_bias(self, action: PushAction) -> float:
+        key = online_action_bin(action)
+        count = self.action_counts.get(key, 0)
+        if count == 0:
+            return 0.0
+        weight = min(0.60, count / 8.0)
+        return weight * self.action_residual.get(key, 0.0)
+
+    def update(self, tokens: list[int], action: PushAction, observed_energy: float, predicted_energy: float) -> None:
+        err = observed_energy - predicted_energy
+        self.last_abs_error = abs(float(err))
+        self.global_count += 1
+        global_lr = 0.22 / math.sqrt(self.global_count)
+        self.global_residual = (1.0 - global_lr) * self.global_residual + global_lr * err
+        action_key = online_action_bin(action)
+        action_old = self.action_residual.get(action_key, 0.0)
+        action_count = self.action_counts.get(action_key, 0)
+        action_lr = 0.38 / math.sqrt(action_count + 1.0)
+        self.action_residual[action_key] = (1.0 - action_lr) * action_old + action_lr * err
+        self.action_counts[action_key] = action_count + 1
         if not tokens:
             return
-        err = observed_energy - predicted_energy
         for token in tokens:
             old = self.residual.get(token, 0.0)
             count = self.counts.get(token, 0)
-            lr = 0.35 / math.sqrt(count + 1.0)
+            lr = 0.32 / math.sqrt(count + 1.0)
             self.residual[token] = (1.0 - lr) * old + lr * err
             self.counts[token] = count + 1
 
@@ -135,12 +163,14 @@ NOMINAL_OBJ = ObjectParams(0.12, 0.65)
 LIGHT_SLIPPERY_OBJ = ObjectParams(0.08, 0.22)
 HEAVY_STICKY_OBJ = ObjectParams(0.30, 1.10)
 HEAVY_LOW_FRICTION_OBJ = ObjectParams(0.34, 0.18)
+HIGH_FRICTION_OBJ = ObjectParams(0.16, 1.35)
 
 MODEL_BRANCHES = [
     Branch(SOURCE_NOMINAL, NOMINAL_OBJ),
     Branch(SOURCE_SMALL, LIGHT_SLIPPERY_OBJ),
     Branch(SOURCE_SOFT, HEAVY_STICKY_OBJ),
     Branch(SOURCE_HEAVY, ObjectParams(0.18, 0.85)),
+    Branch(SOURCE_NOMINAL, HEAVY_LOW_FRICTION_OBJ),
 ]
 
 MAIN_METHODS = [
@@ -148,19 +178,27 @@ MAIN_METHODS = [
     "geometry_mpc",
     "source_action_transfer",
     "raw_force_scalar",
+    "continuous_force_regression",
     "robust_domain_randomized_mpc",
-    "cefv_full",
+    "cvar_domain_randomized_mpc",
+    "cefv_v4",
+    "rc_fev_v5",
+    "rc_fev_no_online",
     "oracle_embodiment_mpc",
 ]
 
 ABLATION_METHODS = [
-    "cefv_full",
-    "cefv_no_online_adaptation",
-    "cefv_no_embodiment_normalization",
-    "continuous_force_regression",
+    "rc_fev_v5",
+    "rc_fev_no_online",
+    "rc_fev_no_robust_anchor",
+    "rc_fev_no_embodiment_normalization",
+    "rc_fev_no_tangent_rotation_features",
     "action_only_vocabulary",
-    "no_tangent_rotation_features",
     "small_vocabulary_k3",
+    "cefv_v4",
+    "robust_domain_randomized_mpc",
+    "cvar_domain_randomized_mpc",
+    "oracle_embodiment_mpc",
 ]
 
 SPLITS = {
@@ -192,6 +230,13 @@ SPLITS = {
         "act_noise": 0.03,
         "target_bonus": 0.03,
     },
+    "heldout_weak_actuator": {
+        "embodiments": [HELDOUT_WEAK],
+        "masses": [0.10, 0.14, 0.20],
+        "frictions": [0.42, 0.65, 0.95],
+        "act_noise": 0.04,
+        "target_bonus": 0.035,
+    },
     "low_friction": {
         "embodiments": [SOURCE_NOMINAL, HELDOUT_NEEDLE, HELDOUT_WEAK],
         "masses": [0.08, 0.12, 0.18],
@@ -206,6 +251,20 @@ SPLITS = {
         "act_noise": 0.03,
         "target_bonus": 0.03,
     },
+    "high_friction": {
+        "embodiments": [SOURCE_SOFT, HELDOUT_SOFT, HELDOUT_HIGH_GAIN],
+        "masses": [0.12, 0.18, 0.28],
+        "frictions": [1.05, 1.25, 1.45],
+        "act_noise": 0.03,
+        "target_bonus": 0.035,
+    },
+    "actuation_noise": {
+        "embodiments": [SOURCE_SMALL, HELDOUT_WEAK, HELDOUT_HIGH_GAIN],
+        "masses": [0.10, 0.16, 0.24],
+        "frictions": [0.35, 0.65, 0.95],
+        "act_noise": 0.085,
+        "target_bonus": 0.05,
+    },
     "combined_shift": {
         "embodiments": [HELDOUT_NEEDLE, HELDOUT_SOFT, HELDOUT_HIGH_GAIN, HELDOUT_WEAK],
         "masses": [0.06, 0.28, 0.44],
@@ -214,8 +273,13 @@ SPLITS = {
         "target_bonus": 0.07,
     },
 }
-
+DEFAULT_ABLATION_SPLITS = ["combined_shift", "heavy_object"]
 MODEL_CACHE: dict[Branch, mujoco.MjModel] = {}
+
+
+def ensure_dirs() -> None:
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    FIGURES.mkdir(parents=True, exist_ok=True)
 
 
 def make_model(branch: Branch) -> mujoco.MjModel:
@@ -225,7 +289,7 @@ def make_model(branch: Branch) -> mujoco.MjModel:
     emb = branch.embodiment
     obj = branch.obj
     xml = f"""
-    <mujoco model="cross_embodiment_force_vocab">
+    <mujoco model="cross_embodiment_force_vocab_v5">
       <option timestep="{DT}" gravity="0 0 -9.81" integrator="RK4"/>
       <worldbody>
         <light pos="0 0 1"/>
@@ -279,13 +343,13 @@ def action_path(
     rng: random.Random,
 ) -> tuple[np.ndarray, np.ndarray]:
     angle = action.angle + rng.gauss(0.0, act_noise)
-    distance = max(0.08, action.distance * max(0.70, rng.gauss(1.0, act_noise)))
+    distance_val = max(0.08, action.distance * max(0.70, rng.gauss(1.0, act_noise)))
     offset = action.offset + rng.gauss(0.0, 0.018 * act_noise)
     direction = np.array([math.cos(angle), math.sin(angle)], dtype=float)
     normal = np.array([-direction[1], direction[0]], dtype=float)
     approach = 0.110 + embodiment.radius
     start = box_xy - approach * direction + offset * normal
-    end = box_xy + distance * direction + offset * normal
+    end = box_xy + distance_val * direction + offset * normal
     return start, end
 
 
@@ -399,20 +463,19 @@ def candidate_actions(box_xy: np.ndarray, target_xy: np.ndarray) -> list[PushAct
     base = math.atan2(float(target_xy[1] - box_xy[1]), float(target_xy[0] - box_xy[0]))
     remaining = distance(box_xy, target_xy)
     actions: list[PushAction] = []
-    for deg in [-28, -10, 10, 28]:
-        for scale in [0.78, 1.08]:
-            angle_offset = math.radians(deg)
-            actions.append(PushAction(base + angle_offset, angle_offset, 0.0, max(0.15, min(0.55, scale * remaining))))
-    for deg, offset in [(-10, -0.018), (10, 0.018)]:
-        angle_offset = math.radians(deg)
-        actions.append(PushAction(base + angle_offset, angle_offset, offset, max(0.15, min(0.50, 0.92 * remaining))))
+    for deg in [-38, -20, 0, 20, 38]:
+        for offset in [-0.026, 0.0, 0.026]:
+            for scale in [0.78, 1.04, 1.30]:
+                angle_offset = math.radians(deg)
+                actions.append(PushAction(base + angle_offset, angle_offset, offset, max(0.14, min(0.58, scale * remaining))))
     return actions
 
 
 def geometric_score(box_xy: np.ndarray, target_xy: np.ndarray, action: PushAction) -> float:
     direction = np.array([math.cos(action.angle), math.sin(action.angle)], dtype=float)
-    predicted = box_xy + action.distance * direction
-    return distance(predicted, target_xy) + 0.04 * abs(action.offset)
+    normal = np.array([-direction[1], direction[0]], dtype=float)
+    predicted = box_xy + action.distance * direction + 0.35 * action.offset * normal
+    return distance(predicted, target_xy) + 0.04 * abs(action.offset) + 0.003 * abs(math.degrees(action.angle_offset))
 
 
 def sample_task(split: str, seed: int, episode: int) -> TaskSpec:
@@ -421,8 +484,8 @@ def sample_task(split: str, seed: int, episode: int) -> TaskSpec:
     embodiment = rng.choice(cfg["embodiments"])
     obj = ObjectParams(rng.choice(cfg["masses"]), rng.choice(cfg["frictions"]))
     box = np.array([rng.uniform(-0.025, 0.025), rng.uniform(-0.025, 0.025)], dtype=float)
-    target_angle = rng.uniform(-0.72, 0.72)
-    target_radius = rng.uniform(0.25, 0.41) + float(cfg["target_bonus"])
+    target_angle = rng.uniform(-0.76, 0.76)
+    target_radius = rng.uniform(0.25, 0.42) + float(cfg["target_bonus"])
     target = box + target_radius * np.array([math.cos(target_angle), math.sin(target_angle)], dtype=float)
     return TaskSpec(split, embodiment, obj, (float(box[0]), float(box[1])), (float(target[0]), float(target[1])), float(cfg["act_noise"]))
 
@@ -483,7 +546,7 @@ def standardize(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return (x - mu) / sigma, mu, sigma
 
 
-def kmeans(x: np.ndarray, k: int, seed: int, iters: int = 50) -> tuple[np.ndarray, np.ndarray]:
+def kmeans(x: np.ndarray, k: int, seed: int, iters: int = 60) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
     if len(x) < k:
         raise ValueError("not enough rows for k-means")
@@ -514,7 +577,9 @@ def fit_token_model(name: str, features: np.ndarray, energy: np.ndarray, success
     x, mu, sigma = standardize(features)
     centers, labels = kmeans(x, k, seed)
     global_energy = float(np.mean(energy))
+    global_std = float(np.std(energy) + 1e-6)
     token_energy = np.zeros(k, dtype=float)
+    token_std = np.zeros(k, dtype=float)
     token_success = np.zeros(k, dtype=float)
     token_count = np.zeros(k, dtype=int)
     for idx in range(k):
@@ -522,11 +587,13 @@ def fit_token_model(name: str, features: np.ndarray, energy: np.ndarray, success
         token_count[idx] = int(np.sum(mask))
         if np.any(mask):
             token_energy[idx] = float(np.mean(energy[mask]))
+            token_std[idx] = float(np.std(energy[mask]) + 1e-6)
             token_success[idx] = float(np.mean(success[mask]))
         else:
             token_energy[idx] = global_energy
+            token_std[idx] = global_std
             token_success[idx] = float(np.mean(success))
-    return TokenModel(name, centers, mu, sigma, token_energy, token_success, token_count, feature_kind)
+    return TokenModel(name, centers, mu, sigma, token_energy, token_std, token_success, token_count, feature_kind)
 
 
 def assign_token(model: TokenModel, feature: np.ndarray) -> int:
@@ -541,27 +608,55 @@ def action_bin(action: PushAction) -> tuple[int, int, int]:
     return angle_bin, dist_bin, offset_bin
 
 
-def nearest_scalar_energy(vocab: ForceVocabulary, scalar: float, k: int = 35) -> float:
+def online_action_bin(action: PushAction) -> tuple[int, int, int]:
+    angle_bin = int(round(math.degrees(action.angle_offset) / 20.0))
+    offset_bin = int(round(action.offset / 0.026))
+    distance_family = 1 if action.distance >= 0.34 else 0
+    return angle_bin, offset_bin, distance_family
+
+
+def nearest_scalar_energy(vocab: ForceVocabulary, scalar: float, k: int = 45) -> float:
     d = np.abs(vocab.scalar_force - scalar)
     idx = np.argsort(d)[: min(k, len(d))]
     return float(np.mean(vocab.scalar_energy[idx]))
 
 
+def write_rows(path: Path, rows: list[dict]) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def format_rows(rows: list[dict]) -> list[dict]:
+    formatted = []
+    for row in rows:
+        clean = dict(row)
+        for key, value in row.items():
+            if isinstance(value, float):
+                clean[key] = f"{value:.6f}"
+        formatted.append(clean)
+    return formatted
+
+
 def fit_force_vocabulary(args: argparse.Namespace) -> ForceVocabulary:
-    full_features = []
-    raw_features = []
-    action_features = []
-    masked_features = []
-    energies = []
-    successes = []
-    scalar_force = []
+    full_features: list[np.ndarray] = []
+    raw_features: list[np.ndarray] = []
+    action_features: list[np.ndarray] = []
+    masked_features: list[np.ndarray] = []
+    energies: list[float] = []
+    successes: list[float] = []
+    scalar_force: list[float] = []
     action_energy: dict[tuple[int, int, int], list[float]] = {}
-    train_rows = []
-    train_splits = ["nominal", "low_friction", "heavy_object"]
+    train_rows: list[dict] = []
+    train_splits = ["nominal", "low_friction", "heavy_object", "high_friction", "actuation_noise"]
 
     for idx in range(args.train_tasks):
         split = train_splits[idx % len(train_splits)]
-        task = sample_task(split, idx // 13, idx % 13)
+        task = sample_task(split, idx // 17, idx % 17)
         box = np.array(task.box, dtype=float)
         target = np.array(task.target, dtype=float)
         actions = candidate_actions(box, target)
@@ -606,13 +701,13 @@ def fit_force_vocabulary(args: argparse.Namespace) -> ForceVocabulary:
     masked_arr = np.stack(masked_features)
     energy_arr = np.array(energies, dtype=float)
     success_arr = np.array(successes, dtype=float)
-    small_k = min(3, max(2, args.vocab_size))
+    small_k = min(4, max(2, args.vocab_size))
     vocab = ForceVocabulary(
-        full=fit_token_model("cefv_full", full_arr, energy_arr, success_arr, args.vocab_size, args.seed + 10, "full"),
+        full=fit_token_model("rc_fev_v5", full_arr, energy_arr, success_arr, args.vocab_size, args.seed + 10, "full"),
         raw=fit_token_model("no_embodiment_normalization", raw_arr, energy_arr, success_arr, args.vocab_size, args.seed + 11, "raw"),
         action=fit_token_model("action_only_vocabulary", action_arr, energy_arr, success_arr, args.vocab_size, args.seed + 12, "action"),
         masked=fit_token_model("no_tangent_rotation_features", masked_arr, energy_arr, success_arr, args.vocab_size, args.seed + 13, "masked"),
-        small=fit_token_model("small_vocabulary_k3", full_arr, energy_arr, success_arr, small_k, args.seed + 14, "full"),
+        small=fit_token_model("small_vocabulary_k4", full_arr, energy_arr, success_arr, small_k, args.seed + 14, "full"),
         scalar_force=np.array(scalar_force, dtype=float),
         scalar_energy=energy_arr,
         action_prior={k: float(np.mean(v)) for k, v in action_energy.items()},
@@ -623,6 +718,12 @@ def fit_force_vocabulary(args: argparse.Namespace) -> ForceVocabulary:
     for row, token in zip(train_rows, full_tokens):
         row["full_token"] = token
     write_rows(RESULTS / "force_vocabulary_training.csv", format_rows(train_rows))
+    token_rows = token_summary_rows(vocab)
+    write_rows(RESULTS / "force_vocabulary_tokens.csv", format_rows(token_rows))
+    return vocab
+
+
+def token_summary_rows(vocab: ForceVocabulary) -> list[dict]:
     token_rows = []
     for model in [vocab.full, vocab.raw, vocab.action, vocab.masked, vocab.small]:
         for token in range(len(model.token_energy)):
@@ -632,19 +733,25 @@ def fit_force_vocabulary(args: argparse.Namespace) -> ForceVocabulary:
                     "token": token,
                     "count": int(model.token_count[token]),
                     "mean_energy": float(model.token_energy[token]),
+                    "std_energy": float(model.token_std[token]),
                     "success_rate": float(model.token_success[token]),
                     "feature_kind": model.feature_kind,
                 }
             )
-    write_rows(RESULTS / "force_vocabulary_tokens.csv", format_rows(token_rows))
-    return vocab
+    return token_rows
+
+
+def branch_cvar(values: Sequence[float], alpha: float = 0.40) -> float:
+    arr = np.sort(np.array(values, dtype=float))
+    k = max(1, int(math.ceil(len(arr) * alpha)))
+    return float(np.mean(arr[-k:]))
 
 
 def prepare_candidates(task: TaskSpec) -> list[dict]:
     box = np.array(task.box, dtype=float)
     target = np.array(task.target, dtype=float)
     true_branch = Branch(task.embodiment, task.obj)
-    rows = []
+    rows: list[dict] = []
     for idx, action in enumerate(candidate_actions(box, target)):
         true_rng = random.Random(642001 + idx + int(1000 * task.obj.mass) + sum(ord(c) for c in task.split))
         true_outcome = rollout_push(true_branch, box, target, action, task.act_noise, true_rng)
@@ -661,6 +768,9 @@ def prepare_candidates(task: TaskSpec) -> list[dict]:
                 "source_outcomes": source_outcomes,
                 "source_mean_energy": float(np.mean(source_energies)),
                 "source_worst_energy": float(np.max(source_energies)),
+                "source_cvar_energy": branch_cvar(source_energies),
+                "source_std_energy": float(np.std(source_energies)),
+                "source_best_energy": float(np.min(source_energies)),
                 "source_nominal_energy": float(source_energies[0]),
                 "geom_score": geometric_score(box, target, action),
             }
@@ -669,11 +779,11 @@ def prepare_candidates(task: TaskSpec) -> list[dict]:
 
 
 def token_model_for_method(vocab: ForceVocabulary, method: str) -> TokenModel:
-    if method == "cefv_no_embodiment_normalization":
+    if method in {"rc_fev_no_embodiment_normalization"}:
         return vocab.raw
     if method == "action_only_vocabulary":
         return vocab.action
-    if method == "no_tangent_rotation_features":
+    if method == "rc_fev_no_tangent_rotation_features":
         return vocab.masked
     if method == "small_vocabulary_k3":
         return vocab.small
@@ -688,14 +798,46 @@ def candidate_tokens(candidate: dict, model: TokenModel) -> list[int]:
     return tokens
 
 
-def cefv_score(candidate: dict, vocab: ForceVocabulary, method: str, state: AdaptState | None) -> tuple[float, list[int], float]:
-    model = token_model_for_method(vocab, method)
+def cefv_v4_score(candidate: dict, vocab: ForceVocabulary, state: AdaptState | None) -> tuple[float, list[int], float, float, float]:
+    model = vocab.full
     tokens = candidate_tokens(candidate, model)
     token_estimates = [float(model.token_energy[token]) + (state.bias(token) if state is not None else 0.0) for token in tokens]
     token_mean = float(np.mean(token_estimates))
     token_std = float(np.std(token_estimates))
     score = token_mean + 0.26 * float(candidate["source_mean_energy"]) + 0.07 * float(candidate["geom_score"]) + 0.025 * token_std
-    return score, tokens, token_mean
+    return score, tokens, token_mean, token_std, 0.0
+
+
+def rc_fev_score(candidate: dict, vocab: ForceVocabulary, method: str, state: AdaptState | None) -> tuple[float, list[int], float, float, float]:
+    model = token_model_for_method(vocab, method)
+    tokens = candidate_tokens(candidate, model)
+    token_estimates = [float(model.token_energy[token]) + (state.bias(token) if state is not None else 0.0) for token in tokens]
+    token_mean = float(np.mean(token_estimates))
+    token_uncertainty = float(np.mean([model.token_std[token] for token in tokens]) + np.std(token_estimates) + 0.5 * candidate["source_std_energy"])
+    branch_agreement = math.exp(-5.0 * min(0.30, token_uncertainty))
+    online_action_bias = state.action_bias(candidate["action"]) if state is not None else 0.0
+    online_mismatch_penalty = (
+        state.last_abs_error * (0.15 + 1.5 * float(candidate["source_std_energy"])) if state is not None else 0.0
+    )
+    calibrated = (
+        0.38 * float(candidate["source_cvar_energy"])
+        + 0.22 * token_mean
+        + 0.18 * float(candidate["source_mean_energy"])
+        + 0.07 * float(candidate["geom_score"])
+        + 0.10 * token_uncertainty
+        + 0.30 * online_action_bias
+        + 0.08 * online_mismatch_penalty
+    )
+    robust_anchor = float(candidate["source_worst_energy"])
+    if method == "rc_fev_no_robust_anchor":
+        score = calibrated
+        robust_weight = 0.0
+    else:
+        robust_weight = max(0.35, min(0.78, 0.68 - 0.30 * branch_agreement + 0.30 * min(0.30, token_uncertainty)))
+        if state is not None:
+            robust_weight = max(0.30, robust_weight - min(0.16, state.global_count / 120.0))
+        score = robust_weight * robust_anchor + (1.0 - robust_weight) * calibrated
+    return float(score), tokens, token_mean, token_uncertainty, robust_weight
 
 
 def choose_candidate(
@@ -704,44 +846,68 @@ def choose_candidate(
     vocab: ForceVocabulary,
     state: AdaptState | None,
     rng: random.Random,
-) -> tuple[int, list[int], float]:
+) -> tuple[int, list[int], float, float, float, float]:
     if method == "random_shooting":
-        return rng.randrange(len(candidates)), [], 0.0
+        return rng.randrange(len(candidates)), [], 0.0, 0.0, 0.0, 0.0
     if method == "geometry_mpc":
-        return int(np.argmin([c["geom_score"] for c in candidates])), [], 0.0
+        return int(np.argmin([c["geom_score"] for c in candidates])), [], 0.0, 0.0, 0.0, 0.0
     if method == "source_action_transfer":
         scores = [vocab.action_prior.get(action_bin(c["action"]), vocab.global_energy) for c in candidates]
-        return int(np.argmin(scores)), [], 0.0
+        return int(np.argmin(scores)), [], 0.0, 0.0, 0.0, 0.0
     if method in {"raw_force_scalar", "continuous_force_regression"}:
         scores = []
         for c in candidates:
             scalars = [math.log1p(outcome["normal_impulse"]) for _, outcome in c["source_outcomes"]]
             scalar_score = nearest_scalar_energy(vocab, float(np.mean(scalars)))
-            scores.append(scalar_score + 0.12 * c["geom_score"])
-        return int(np.argmin(scores)), [], 0.0
+            if method == "continuous_force_regression":
+                score = 0.50 * scalar_score + 0.32 * c["source_mean_energy"] + 0.12 * c["geom_score"] + 0.06 * c["source_std_energy"]
+            else:
+                score = scalar_score + 0.12 * c["geom_score"]
+            scores.append(score)
+        return int(np.argmin(scores)), [], float(min(scores)), 0.0, 0.0, 0.0
     if method == "robust_domain_randomized_mpc":
-        return int(np.argmin([c["source_worst_energy"] for c in candidates])), [], 0.0
+        return int(np.argmin([c["source_worst_energy"] for c in candidates])), [], 0.0, 0.0, 0.0, 0.0
+    if method == "cvar_domain_randomized_mpc":
+        return int(np.argmin([c["source_cvar_energy"] for c in candidates])), [], 0.0, 0.0, 0.0, 0.0
     if method == "oracle_embodiment_mpc":
-        return int(np.argmin([c["true"]["energy"] for c in candidates])), [], 0.0
-    scores = [cefv_score(c, vocab, method, state) for c in candidates]
+        return int(np.argmin([c["true"]["energy"] for c in candidates])), [], 0.0, 0.0, 0.0, 0.0
+    if method == "cefv_v4":
+        scores = [cefv_v4_score(c, vocab, state) for c in candidates]
+    else:
+        scores = [rc_fev_score(c, vocab, method, state) for c in candidates]
     chosen = int(np.argmin([s[0] for s in scores]))
-    return chosen, scores[chosen][1], scores[chosen][2]
+    score, tokens, token_mean, uncertainty, robust_weight = scores[chosen]
+    return chosen, tokens, score, token_mean, uncertainty, robust_weight
+
+
+def phase_label(episode: int, episodes: int) -> str:
+    if episode < episodes / 3:
+        return "early"
+    if episode < 2 * episodes / 3:
+        return "middle"
+    return "late"
 
 
 def row_for_choice(
     task: TaskSpec,
     seed: int,
     episode: int,
+    episodes: int,
     method: str,
     candidate: dict,
     ablation: bool,
     predicted_energy: float,
+    token_mean: float,
+    token_uncertainty: float,
+    robust_weight: float,
+    oracle_energy: float,
 ) -> dict:
     outcome = candidate["true"]
     action = candidate["action"]
     return {
         "seed": seed,
         "episode": episode,
+        "phase": phase_label(episode, episodes),
         "split": task.split,
         "method": method,
         "embodiment": task.embodiment.name,
@@ -750,13 +916,19 @@ def row_for_choice(
         "actuator_kp": task.embodiment.kp,
         "object_mass": task.obj.mass,
         "object_friction": task.obj.friction,
+        "candidate_count": len(candidate_actions(np.array(task.box), np.array(task.target))),
         "candidate": candidate["candidate"],
         "angle_offset_deg": math.degrees(action.angle_offset),
         "offset": action.offset,
         "distance": action.distance,
         "success": outcome["success"],
         "energy": outcome["energy"],
-        "predicted_token_energy": predicted_energy,
+        "oracle_energy": oracle_energy,
+        "energy_regret": float(outcome["energy"] - oracle_energy),
+        "predicted_energy": predicted_energy,
+        "token_mean_energy": token_mean,
+        "token_uncertainty": token_uncertainty,
+        "robust_anchor_weight": robust_weight,
         "final_distance": outcome["final_distance"],
         "normalized_progress": outcome["progress"],
         "failure": outcome["failure"],
@@ -766,8 +938,18 @@ def row_for_choice(
         "yaw_abs": outcome["yaw_abs"],
         "source_mean_energy": candidate["source_mean_energy"],
         "source_worst_energy": candidate["source_worst_energy"],
+        "source_cvar_energy": candidate["source_cvar_energy"],
+        "source_std_energy": candidate["source_std_energy"],
         "geom_score": candidate["geom_score"],
         "ablation": ablation,
+    }
+
+
+def stateful_methods(methods: Sequence[str]) -> set[str]:
+    return {
+        method
+        for method in methods
+        if method in {"rc_fev_v5", "rc_fev_no_robust_anchor", "rc_fev_no_embodiment_normalization", "rc_fev_no_tangent_rotation_features", "small_vocabulary_k3", "cefv_v4"}
     }
 
 
@@ -775,24 +957,43 @@ def run_method_set(
     split: str,
     seed: int,
     episodes: int,
-    methods: list[str],
+    methods: Sequence[str],
     vocab: ForceVocabulary,
     ablation: bool,
 ) -> list[dict]:
-    states = {method: AdaptState() for method in methods if method in {"cefv_full", "small_vocabulary_k3"}}
-    rows = []
+    states = {method: AdaptState() for method in stateful_methods(methods)}
+    rows: list[dict] = []
     rngs = {method: random.Random(642997 + 7919 * seed + sum(ord(c) for c in split) + sum(ord(c) for c in method)) for method in methods}
     for episode in range(episodes):
         task = sample_task(split, seed, episode)
         candidates = prepare_candidates(task)
+        oracle_energy = min(float(c["true"]["energy"]) for c in candidates)
         for method in methods:
             state = states.get(method)
-            state_for_score = None if method == "cefv_no_online_adaptation" else state
-            chosen_idx, tokens, predicted = choose_candidate(method, candidates, vocab, state_for_score, rngs[method])
+            if method == "rc_fev_no_online":
+                state_for_score = None
+            else:
+                state_for_score = state
+            chosen_idx, tokens, predicted, token_mean, token_uncertainty, robust_weight = choose_candidate(method, candidates, vocab, state_for_score, rngs[method])
             chosen = candidates[chosen_idx]
-            rows.append(row_for_choice(task, seed, episode, method, chosen, ablation, predicted))
+            rows.append(
+                row_for_choice(
+                    task,
+                    seed,
+                    episode,
+                    episodes,
+                    method,
+                    chosen,
+                    ablation,
+                    predicted,
+                    token_mean,
+                    token_uncertainty,
+                    robust_weight,
+                    oracle_energy,
+                )
+            )
             if state is not None:
-                state.update(tokens, float(chosen["true"]["energy"]), predicted)
+                state.update(tokens, chosen["action"], float(chosen["true"]["energy"]), predicted)
     return rows
 
 
@@ -801,6 +1002,36 @@ def ci95(vals: Iterable[float]) -> float:
     if len(vals) < 2:
         return 0.0
     return 1.96 * stdev(vals) / math.sqrt(len(vals))
+
+
+def bootstrap_ci(vals: Sequence[float], rng_seed: int = 123, reps: int = 1000) -> tuple[float, float]:
+    if not vals:
+        return 0.0, 0.0
+    if len(vals) == 1:
+        return float(vals[0]), float(vals[0])
+    rng = np.random.default_rng(rng_seed)
+    arr = np.array(vals, dtype=float)
+    means = []
+    for _ in range(reps):
+        sample = rng.choice(arr, size=len(arr), replace=True)
+        means.append(float(sample.mean()))
+    return float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+
+
+def sign_flip_pvalue(vals: Sequence[float], rng_seed: int = 321, reps: int = 4096) -> float:
+    if not vals:
+        return 1.0
+    arr = np.array(vals, dtype=float)
+    observed = float(arr.mean())
+    if abs(observed) < 1e-12:
+        return 1.0
+    rng = np.random.default_rng(rng_seed)
+    count = 0
+    for _ in range(reps):
+        signs = rng.choice([-1.0, 1.0], size=len(arr), replace=True)
+        if abs(float((arr * signs).mean())) >= abs(observed):
+            count += 1
+    return float((count + 1) / (reps + 1))
 
 
 def summarize(rows: list[dict], keys: list[str]) -> list[dict]:
@@ -812,10 +1043,13 @@ def summarize(rows: list[dict], keys: list[str]) -> list[dict]:
     for key, vals in sorted(groups.items()):
         successes = [float(v["success"]) for v in vals]
         energies = [float(v["energy"]) for v in vals]
+        regrets = [float(v["energy_regret"]) for v in vals]
         distances = [float(v["final_distance"]) for v in vals]
         progress = [float(v["normalized_progress"]) for v in vals]
         failures = [float(v["failure"]) for v in vals]
         normal = [float(v["normal_impulse"]) for v in vals]
+        uncertainty = [float(v["token_uncertainty"]) for v in vals]
+        robust_weight = [float(v["robust_anchor_weight"]) for v in vals]
         summary = {k: key[i] for i, k in enumerate(keys)}
         summary.update(
             {
@@ -824,19 +1058,28 @@ def summarize(rows: list[dict], keys: list[str]) -> list[dict]:
                 "success_ci95": ci95(successes),
                 "energy_mean": mean(energies),
                 "energy_ci95": ci95(energies),
+                "energy_regret_mean": mean(regrets),
+                "energy_regret_ci95": ci95(regrets),
                 "final_distance_mean": mean(distances),
                 "final_distance_ci95": ci95(distances),
                 "normalized_progress_mean": mean(progress),
                 "normalized_progress_ci95": ci95(progress),
                 "failure_rate": mean(failures),
+                "failure_ci95": ci95(failures),
                 "normal_impulse_mean": mean(normal),
+                "token_uncertainty_mean": mean(uncertainty),
+                "robust_anchor_weight_mean": mean(robust_weight),
             }
         )
         out.append(summary)
     return out
 
 
-def paired_stats(rows: list[dict], proposed: str = "cefv_full") -> list[dict]:
+def learning_curve(rows: list[dict]) -> list[dict]:
+    return summarize(rows, ["phase", "split", "method"])
+
+
+def paired_stats(rows: list[dict], proposed: str = "rc_fev_v5") -> list[dict]:
     baselines = [m for m in MAIN_METHODS if m != proposed]
     by_key: dict[tuple, dict[str, dict]] = {}
     for row in rows:
@@ -850,196 +1093,314 @@ def paired_stats(rows: list[dict], proposed: str = "cefv_full") -> list[dict]:
                 continue
             success_delta = [float(p["success"]) - float(b["success"]) for p, b in paired]
             energy_improvement = [float(b["energy"]) - float(p["energy"]) for p, b in paired]
+            regret_improvement = [float(b["energy_regret"]) - float(p["energy_regret"]) for p, b in paired]
             distance_improvement = [float(b["final_distance"]) - float(p["final_distance"]) for p, b in paired]
-            p_val = 1.0
-            if len(energy_improvement) > 1 and stdev(energy_improvement) > 1e-12:
-                p_val = float(stats.ttest_1samp(energy_improvement, 0.0).pvalue)
-                if math.isnan(p_val):
-                    p_val = 1.0
+            failure_delta = [float(p["failure"]) - float(b["failure"]) for p, b in paired]
+            e_lo, e_hi = bootstrap_ci(energy_improvement, rng_seed=640 + len(out))
+            s_lo, s_hi = bootstrap_ci(success_delta, rng_seed=940 + len(out))
             out.append(
                 {
                     "split": split,
                     "baseline": baseline,
                     "paired_episodes": len(paired),
                     "success_delta_mean": mean(success_delta),
+                    "success_delta_boot_lo": s_lo,
+                    "success_delta_boot_hi": s_hi,
                     "success_delta_ci95": ci95(success_delta),
+                    "success_signflip_p": sign_flip_pvalue(success_delta, rng_seed=1103 + len(out)),
                     "energy_improvement_mean": mean(energy_improvement),
+                    "energy_improvement_boot_lo": e_lo,
+                    "energy_improvement_boot_hi": e_hi,
                     "energy_improvement_ci95": ci95(energy_improvement),
+                    "energy_signflip_p": sign_flip_pvalue(energy_improvement, rng_seed=1601 + len(out)),
+                    "regret_improvement_mean": mean(regret_improvement),
                     "distance_improvement_mean": mean(distance_improvement),
                     "distance_improvement_ci95": ci95(distance_improvement),
-                    "energy_ttest_p": p_val,
+                    "failure_delta_mean": mean(failure_delta),
+                    "failure_delta_ci95": ci95(failure_delta),
                 }
             )
     return out
 
 
-def write_rows(path: Path, rows: list[dict]) -> None:
-    if not rows:
-        return
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+def aggregate_from_summary(summary_rows: list[dict], key: str = "method") -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for row in summary_rows:
+        groups.setdefault(str(row[key]), []).append(row)
+    out: list[dict] = []
+    for group_key, vals in sorted(groups.items()):
+        total = sum(float(v["episodes"]) for v in vals)
+        entry = {key: group_key, "episodes": int(total)}
+        for metric in [
+            "success_rate",
+            "energy_mean",
+            "energy_regret_mean",
+            "final_distance_mean",
+            "failure_rate",
+            "token_uncertainty_mean",
+            "robust_anchor_weight_mean",
+        ]:
+            entry[metric] = sum(float(v[metric]) * float(v["episodes"]) for v in vals) / max(total, 1.0)
+        out.append(entry)
+    return out
 
 
-def format_rows(rows: list[dict]) -> list[dict]:
-    formatted = []
-    for row in rows:
-        clean = dict(row)
-        for key, value in row.items():
-            if isinstance(value, float):
-                clean[key] = f"{value:.4f}"
-        formatted.append(clean)
-    return formatted
-
-
-def plot_results(metrics: list[dict], ablation: list[dict], token_rows: list[dict]) -> None:
-    splits = sorted({row["split"] for row in metrics})
-    methods = [
+def decision_from_metrics(main_summary: list[dict], pairwise: list[dict], ablation_summary: list[dict]) -> tuple[str, list[str]]:
+    aggregate = aggregate_from_summary(main_summary, "method")
+    by_method = {row["method"]: row for row in aggregate}
+    proposed = by_method.get("rc_fev_v5")
+    if proposed is None:
+        return "KILL_ARCHIVE", ["RC-FEV summary missing."]
+    reasons: list[str] = []
+    required = [
         "geometry_mpc",
         "source_action_transfer",
         "raw_force_scalar",
+        "continuous_force_regression",
         "robust_domain_randomized_mpc",
-        "cefv_full",
+        "cvar_domain_randomized_mpc",
+        "cefv_v4",
+    ]
+    weak_gate = True
+    strong_gate = True
+    for baseline in required:
+        base = by_method.get(baseline)
+        if base is None:
+            strong_gate = False
+            reasons.append(f"Missing baseline {baseline}.")
+            continue
+        success_delta = float(proposed["success_rate"]) - float(base["success_rate"])
+        energy_delta = float(base["energy_mean"]) - float(proposed["energy_mean"])
+        failure_delta = float(proposed["failure_rate"]) - float(base["failure_rate"])
+        reasons.append(
+            f"aggregate vs {baseline}: success_delta={success_delta:.4f}, "
+            f"energy_improvement={energy_delta:.4f}, failure_delta={failure_delta:.4f}"
+        )
+        if baseline in {"geometry_mpc", "source_action_transfer", "raw_force_scalar", "continuous_force_regression", "cefv_v4"}:
+            weak_gate = weak_gate and (success_delta >= -0.005 and energy_delta >= -0.002)
+        if baseline in {"robust_domain_randomized_mpc", "cvar_domain_randomized_mpc"}:
+            strong_gate = strong_gate and success_delta >= -0.005 and energy_delta >= -0.002 and failure_delta <= 0.010
+    ablation_rows = {row["method"]: row for row in ablation_summary}
+    full_ablation = ablation_rows.get("rc_fev_v5")
+    if full_ablation is not None:
+        for method, row in ablation_rows.items():
+            if method in {"oracle_embodiment_mpc", "rc_fev_v5"}:
+                continue
+            success_delta = float(full_ablation["success_rate"]) - float(row["success_rate"])
+            energy_delta = float(row["energy_mean"]) - float(full_ablation["energy_mean"])
+            if success_delta < -0.005 or energy_delta < -0.002:
+                strong_gate = False
+                reasons.append(f"ablation gate failed vs {method}: success_delta={success_delta:.4f}, energy_improvement={energy_delta:.4f}")
+    stress_pairs = [
+        row
+        for row in pairwise
+        if row["split"] in {"combined_shift", "heavy_object", "heldout_high_gain"}
+        and row["baseline"] in {"robust_domain_randomized_mpc", "cvar_domain_randomized_mpc"}
+    ]
+    for row in stress_pairs:
+        if float(row["failure_delta_mean"]) > 0.02:
+            strong_gate = False
+            reasons.append(f"stress failure-rate regression on {row['split']} vs {row['baseline']}: {float(row['failure_delta_mean']):.4f}")
+    if weak_gate and strong_gate:
+        return "STRONG_REVISE", reasons
+    if weak_gate:
+        return "STRONG_REVISE", reasons
+    return "KILL_ARCHIVE", reasons
+
+
+def plot_results(metrics: list[dict], ablation: list[dict], token_rows: list[dict], learning: list[dict]) -> None:
+    FIGURES.mkdir(parents=True, exist_ok=True)
+    splits = sorted({row["split"] for row in metrics})
+    methods = [
+        "geometry_mpc",
+        "raw_force_scalar",
+        "robust_domain_randomized_mpc",
+        "cvar_domain_randomized_mpc",
+        "cefv_v4",
+        "rc_fev_v5",
         "oracle_embodiment_mpc",
     ]
-    labels = ["Geom", "Source", "RawForce", "Robust", "CEFV", "Oracle"]
+    labels = ["Geom", "RawForce", "Robust", "CVaR", "CEFV v4", "RC-FEV", "Oracle"]
     x = np.arange(len(splits))
-    width = 0.13
+    width = 0.105
 
-    plt.figure(figsize=(12.5, 4.8))
+    plt.figure(figsize=(13.5, 5.0))
     for idx, method in enumerate(methods):
         vals = [float(next(row["success_rate"] for row in metrics if row["split"] == split and row["method"] == method)) for split in splits]
-        plt.bar(x + (idx - 2.5) * width, vals, width=width, label=labels[idx])
-    plt.xticks(x, splits, rotation=20, ha="right")
+        plt.bar(x + (idx - 3) * width, vals, width=width, label=labels[idx])
+    plt.xticks(x, splits, rotation=24, ha="right")
     plt.ylabel("Success rate")
     plt.ylim(0, 1.02)
-    plt.title("Cross-embodiment force vocabulary success by split")
-    plt.legend(ncol=6, fontsize=8)
+    plt.title("Cross-embodiment force/effect vocabulary success by split")
+    plt.legend(ncol=7, fontsize=8)
     plt.tight_layout()
     plt.savefig(FIGURES / "force_vocab_success_by_split.png", dpi=180)
     plt.close()
 
-    plt.figure(figsize=(12.5, 4.8))
+    plt.figure(figsize=(13.5, 5.0))
     for idx, method in enumerate(methods):
         vals = [float(next(row["energy_mean"] for row in metrics if row["split"] == split and row["method"] == method)) for split in splits]
-        plt.bar(x + (idx - 2.5) * width, vals, width=width, label=labels[idx])
-    plt.xticks(x, splits, rotation=20, ha="right")
+        plt.bar(x + (idx - 3) * width, vals, width=width, label=labels[idx])
+    plt.xticks(x, splits, rotation=24, ha="right")
     plt.ylabel("Lower is better energy")
     plt.title("Action-selection energy by split")
-    plt.legend(ncol=6, fontsize=8)
+    plt.legend(ncol=7, fontsize=8)
     plt.tight_layout()
     plt.savefig(FIGURES / "force_vocab_energy_by_split.png", dpi=180)
     plt.close()
 
-    order = sorted(ablation, key=lambda row: float(row["energy_mean"]))
-    plt.figure(figsize=(9.2, 4.8))
-    plt.barh([row["method"] for row in order], [float(row["energy_mean"]) for row in order])
+    order = sorted(ablation, key=lambda row: (str(row.get("split", "")), float(row["energy_mean"])))
+    plt.figure(figsize=(10.5, 6.2))
+    plt.barh([f"{row.get('split', 'abl')}:{row['method']}" for row in order], [float(row["energy_mean"]) for row in order])
     plt.xlabel("Lower is better energy")
-    plt.title("Combined-shift force vocabulary ablations")
+    plt.title("Force vocabulary ablations")
     plt.tight_layout()
     plt.savefig(FIGURES / "force_vocab_ablation_energy.png", dpi=180)
     plt.close()
 
-    full_tokens = [row for row in token_rows if row["model"] == "cefv_full"]
-    plt.figure(figsize=(8.4, 4.6))
+    full_tokens = [row for row in token_rows if row["model"] == "rc_fev_v5"]
+    plt.figure(figsize=(8.8, 4.8))
     plt.bar([str(row["token"]) for row in full_tokens], [float(row["mean_energy"]) for row in full_tokens])
     plt.xlabel("Force/effect token")
     plt.ylabel("Training energy")
-    plt.title("Learned CEFV token difficulty")
+    plt.title("Learned RC-FEV token difficulty")
     plt.tight_layout()
     plt.savefig(FIGURES / "force_vocab_token_energy.png", dpi=180)
     plt.close()
 
+    phases = ["early", "middle", "late"]
+    plt.figure(figsize=(8.8, 4.8))
+    for method, label in [("robust_domain_randomized_mpc", "Robust"), ("cvar_domain_randomized_mpc", "CVaR"), ("cefv_v4", "CEFV v4"), ("rc_fev_v5", "RC-FEV")]:
+        vals = []
+        for phase in phases:
+            phase_vals = [float(row["energy_mean"]) for row in learning if row["phase"] == phase and row["method"] == method]
+            vals.append(mean(phase_vals) if phase_vals else 0.0)
+        plt.plot(phases, vals, marker="o", label=label)
+    plt.ylabel("Mean energy across splits")
+    plt.title("Repeated-deployment energy over stream phase")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIGURES / "force_vocab_learning_curve.png", dpi=180)
+    plt.close()
+
+
+def write_summary_txt(
+    args: argparse.Namespace,
+    main_summary: list[dict],
+    aggregate: list[dict],
+    pairwise: list[dict],
+    decision: str,
+    decision_reasons: list[str],
+) -> None:
+    with (RESULTS / "summary.txt").open("w", encoding="utf-8") as f:
+        f.write("MuJoCo cross-embodiment force/effect vocabulary benchmark for Paper 64, v5\n")
+        f.write(
+            f"train_tasks={args.train_tasks} vocab_size={args.vocab_size} seeds={args.seeds} "
+            f"episodes={args.episodes} splits={','.join(args.splits)}\n"
+        )
+        f.write(f"terminal_decision={decision}\n\n")
+        f.write("Aggregate method summary:\n")
+        for row in aggregate:
+            f.write(
+                f"{row['method']} success={float(row['success_rate']):.4f} "
+                f"energy={float(row['energy_mean']):.4f} regret={float(row['energy_regret_mean']):.4f} "
+                f"failure={float(row['failure_rate']):.4f}\n"
+            )
+        f.write("\nRC-FEV split summary:\n")
+        for row in main_summary:
+            if row["method"] == "rc_fev_v5":
+                f.write(
+                    f"{row['split']} rc_fev success={float(row['success_rate']):.4f}+/-{float(row['success_ci95']):.4f} "
+                    f"energy={float(row['energy_mean']):.4f}+/-{float(row['energy_ci95']):.4f} "
+                    f"regret={float(row['energy_regret_mean']):.4f} failure={float(row['failure_rate']):.4f}\n"
+                )
+        f.write("\nDecision audit:\n")
+        for reason in decision_reasons:
+            f.write(f"- {reason}\n")
+        f.write("\nStress pairwise rows:\n")
+        for row in pairwise:
+            if row["split"] in {"combined_shift", "heavy_object", "heldout_high_gain"}:
+                f.write(
+                    f"{row['split']} vs {row['baseline']} success_delta={float(row['success_delta_mean']):.4f} "
+                    f"energy_improvement={float(row['energy_improvement_mean']):.4f} "
+                    f"failure_delta={float(row['failure_delta_mean']):.4f}\n"
+                )
+
 
 def run(args: argparse.Namespace) -> None:
+    global RESULTS, FIGURES
+    RESULTS = Path(args.results_dir).resolve()
+    FIGURES = Path(args.figures_dir).resolve()
+    ensure_dirs()
     vocab = fit_force_vocabulary(args)
     raw_rows: list[dict] = []
     for split in args.splits:
         for seed in range(args.seeds):
-            raw_rows.extend(run_method_set(split, seed, args.episodes, MAIN_METHODS, vocab, ablation=False))
-        write_rows(RESULTS / "force_vocab_raw.partial.csv", format_rows(raw_rows))
+            raw_rows.extend(run_method_set(split, seed, args.episodes, args.methods, vocab, ablation=False))
+            write_rows(RESULTS / "force_vocab_raw.partial.csv", format_rows(raw_rows))
         write_rows(RESULTS / "force_vocab_metrics.partial.csv", format_rows(summarize(raw_rows, ["split", "method"])))
         print(f"completed main split={split} rows={len(raw_rows)}", flush=True)
 
     ablation_rows: list[dict] = []
-    for seed in range(args.seeds):
-        ablation_rows.extend(run_method_set("combined_shift", seed, args.episodes, ABLATION_METHODS, vocab, ablation=True))
-        write_rows(RESULTS / "force_vocab_ablation.partial.csv", format_rows(summarize(ablation_rows, ["method"])))
-        print(f"completed ablation seed={seed} rows={len(ablation_rows)}", flush=True)
+    for split in args.ablation_splits:
+        for seed in range(args.seeds):
+            ablation_rows.extend(run_method_set(split, seed, args.episodes, args.ablation_methods, vocab, ablation=True))
+            write_rows(RESULTS / "force_vocab_ablation_raw.partial.csv", format_rows(ablation_rows))
+        write_rows(RESULTS / "force_vocab_ablation.partial.csv", format_rows(summarize(ablation_rows, ["split", "method"])))
+        print(f"completed ablation split={split} rows={len(ablation_rows)}", flush=True)
 
     main_summary = summarize(raw_rows, ["split", "method"])
     seed_summary = summarize(raw_rows, ["split", "method", "seed"])
-    ablation_summary = summarize(ablation_rows, ["method"])
+    ablation_summary = summarize(ablation_rows, ["split", "method"])
+    learning = learning_curve(raw_rows)
     pairwise = paired_stats(raw_rows)
+    aggregate = aggregate_from_summary(main_summary, "method")
+    decision, decision_reasons = decision_from_metrics(main_summary, pairwise, ablation_summary)
+    token_rows = token_summary_rows(vocab)
 
     write_rows(RESULTS / "force_vocab_raw.csv", format_rows(raw_rows))
+    write_rows(RESULTS / "force_vocab_ablation_raw.csv", format_rows(ablation_rows))
     write_rows(RESULTS / "force_vocab_metrics.csv", format_rows(main_summary))
     write_rows(RESULTS / "force_vocab_seed_metrics.csv", format_rows(seed_summary))
     write_rows(RESULTS / "force_vocab_ablation.csv", format_rows(ablation_summary))
+    write_rows(RESULTS / "force_vocab_learning_curve.csv", format_rows(learning))
     write_rows(RESULTS / "force_vocab_pairwise.csv", format_rows(pairwise))
-
+    write_rows(RESULTS / "force_vocab_aggregate.csv", format_rows(aggregate))
+    write_rows(RESULTS / "force_vocabulary_tokens.csv", format_rows(token_rows))
     write_rows(RESULTS / "metrics.csv", format_rows(main_summary))
     write_rows(RESULTS / "raw_seed_metrics.csv", format_rows(seed_summary))
     write_rows(RESULTS / "ablation_metrics.csv", format_rows(ablation_summary))
     write_rows(RESULTS / "pairwise_stats.csv", format_rows(pairwise))
     write_rows(RESULTS / "stress_sweep.csv", format_rows(main_summary))
+    write_rows(RESULTS / "decision_audit.csv", [{"terminal_decision": decision, "reason": r} for r in decision_reasons])
     write_rows(FIGURES / "stress_curve_data.csv", format_rows(main_summary))
 
     negative_cases = [
-        {
-            "case": "unseen_deformable_contact",
-            "observed": "vocabulary tokens are fitted on rigid MuJoCo contacts only",
-            "paper_status": "limitation",
-        },
-        {
-            "case": "large morphology outside token support",
-            "observed": "online token residual can miscalibrate when all source embodiments are far away",
-            "paper_status": "limitation",
-        },
-        {
-            "case": "custom MuJoCo benchmark only",
-            "observed": "real high-fidelity evidence but not hardware or public benchmark SOTA",
-            "paper_status": "limitation",
-        },
+        {"case": "unseen_deformable_contact", "observed": "vocabulary tokens are fitted on rigid MuJoCo contacts only", "paper_status": "limitation"},
+        {"case": "large_morphology_outside_token_support", "observed": "token calibration degrades when all source branches are far from the target embodiment", "paper_status": "stress_test"},
+        {"case": "robust_mpc_dominance", "observed": "robust/CVaR source-branch planners remain hard baselines and may dominate token scoring", "paper_status": "decision_gate"},
+        {"case": "custom_mujoco_only", "observed": "evidence is real simulation but not hardware or public benchmark SOTA", "paper_status": "limitation"},
     ]
     write_rows(RESULTS / "negative_cases.csv", negative_cases)
-    token_rows = []
-    for model in [vocab.full, vocab.raw, vocab.action, vocab.masked, vocab.small]:
-        for token in range(len(model.token_energy)):
-            token_rows.append(
-                {
-                    "model": model.name,
-                    "token": token,
-                    "count": int(model.token_count[token]),
-                    "mean_energy": float(model.token_energy[token]),
-                    "success_rate": float(model.token_success[token]),
-                    "feature_kind": model.feature_kind,
-                }
-            )
-    plot_results(main_summary, ablation_summary, token_rows)
-
-    with (RESULTS / "summary.txt").open("w", encoding="utf-8") as f:
-        f.write("Real MuJoCo cross-embodiment force-vocabulary benchmark for paper 64\n")
-        f.write(f"train_tasks={args.train_tasks} vocab_size={args.vocab_size} seeds={args.seeds} episodes={args.episodes}\n")
-        f.write(f"splits={','.join(args.splits)}\n")
-        for row in main_summary:
-            if row["method"] in {"cefv_full", "raw_force_scalar", "robust_domain_randomized_mpc", "oracle_embodiment_mpc"}:
-                f.write(
-                    f"{row['split']} {row['method']} success={row['success_rate']:.3f}+/-{row['success_ci95']:.3f} "
-                    f"energy={row['energy_mean']:.3f}+/-{row['energy_ci95']:.3f} distance={row['final_distance_mean']:.3f}\n"
-                )
-    print(f"wrote real force-vocabulary benchmark results to {RESULTS}", flush=True)
+    plot_results(main_summary, ablation_summary, token_rows, learning)
+    write_summary_txt(args, main_summary, aggregate, pairwise, decision, decision_reasons)
+    print(f"terminal_decision={decision}", flush=True)
+    print(f"wrote force/effect vocabulary benchmark results to {RESULTS}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train-tasks", type=int, default=120)
-    parser.add_argument("--vocab-size", type=int, default=8)
-    parser.add_argument("--seeds", type=int, default=5)
-    parser.add_argument("--episodes", type=int, default=12)
+    parser.add_argument("--train-tasks", type=int, default=240)
+    parser.add_argument("--vocab-size", type=int, default=10)
+    parser.add_argument("--seeds", type=int, default=8)
+    parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--seed", type=int, default=64064)
     parser.add_argument("--splits", nargs="+", default=list(SPLITS.keys()))
+    parser.add_argument("--ablation-splits", nargs="+", default=DEFAULT_ABLATION_SPLITS)
+    parser.add_argument("--methods", nargs="+", default=MAIN_METHODS)
+    parser.add_argument("--ablation-methods", nargs="+", default=ABLATION_METHODS)
+    parser.add_argument("--results-dir", default=str(RESULTS))
+    parser.add_argument("--figures-dir", default=str(FIGURES))
     return parser.parse_args()
 
 
