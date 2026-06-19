@@ -1,0 +1,13 @@
+terminal_decision,reason
+STRONG_REVISE,"aggregate vs geometry_mpc: success_delta=0.5775, energy_improvement=0.1751, failure_delta=-0.0094"
+STRONG_REVISE,"aggregate vs source_action_transfer: success_delta=0.0212, energy_improvement=0.0090, failure_delta=0.0087"
+STRONG_REVISE,"aggregate vs raw_force_scalar: success_delta=0.4875, energy_improvement=0.1035, failure_delta=-0.0169"
+STRONG_REVISE,"aggregate vs continuous_force_regression: success_delta=0.1850, energy_improvement=0.0178, failure_delta=0.0037"
+STRONG_REVISE,"aggregate vs robust_domain_randomized_mpc: success_delta=0.0156, energy_improvement=0.0008, failure_delta=0.0006"
+STRONG_REVISE,"aggregate vs cvar_domain_randomized_mpc: success_delta=0.0138, energy_improvement=0.0002, failure_delta=0.0000"
+STRONG_REVISE,"aggregate vs cefv_v4: success_delta=0.1256, energy_improvement=0.0160, failure_delta=0.0012"
+STRONG_REVISE,"ablation gate failed vs rc_fev_no_embodiment_normalization: success_delta=-0.0250, energy_improvement=-0.0001"
+STRONG_REVISE,"ablation gate failed vs rc_fev_no_online: success_delta=-0.0062, energy_improvement=0.0002"
+STRONG_REVISE,"ablation gate failed vs rc_fev_no_robust_anchor: success_delta=-0.0437, energy_improvement=0.0006"
+STRONG_REVISE,"ablation gate failed vs rc_fev_no_tangent_rotation_features: success_delta=-0.0187, energy_improvement=-0.0001"
+STRONG_REVISE,"ablation gate failed vs small_vocabulary_k3: success_delta=-0.0062, energy_improvement=-0.0000"
